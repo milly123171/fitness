@@ -18,6 +18,7 @@
       <button class="tab-btn" data-tab="diary">飲食紀錄</button>
       <button class="tab-btn" data-tab="foods">食物庫</button>
       <button class="tab-btn" data-tab="recipes">食譜</button>
+      <button class="tab-btn" data-tab="subscribe">週報訂閱</button>
       <button class="tab-btn" data-tab="profile">個人設定</button>
     </nav>
     <button class="theme-toggle" id="themeToggle" title="切換深色/淺色模式">🌙</button>
@@ -86,6 +87,20 @@
       </div>
 
       <div id="diaryMeals"></div>
+
+      <div class="card">
+        <h3>📷 拍照辨識食物 <span class="hint">(使用 Google Gemini 影像辨識，需先於「個人設定」填入 API Key)</span></h3>
+        <div id="apiKeyNotice" class="slider-hint"></div>
+        <div class="photo-recognize-row">
+          <input type="file" id="foodPhotoInput" accept="image/*" capture="environment">
+          <button class="btn primary" id="recognizePhotoBtn">辨識食物</button>
+        </div>
+        <div id="photoPreviewWrap" style="display:none;">
+          <img id="photoPreview" alt="食物照片預覽">
+        </div>
+        <div id="recognizeStatus" class="slider-hint"></div>
+        <div id="recognizeResults"></div>
+      </div>
 
       <div class="card">
         <h3>快速加入</h3>
@@ -187,6 +202,50 @@
       <div class="card-grid" id="recipeList"></div>
     </section>
 
+    <!-- Subscribe -->
+    <section class="panel" id="panel-subscribe">
+      <div class="panel-header">
+        <h1>週報訂閱</h1>
+      </div>
+
+      <div class="card">
+        <h3 id="subscribeFormTitle">訂閱每週飲食建議報告</h3>
+        <p class="hint" style="margin-top:-8px;">
+          留下姓名與 Email，之後串接寄送服務（例如 EmailJS、Mailchimp 或 Zapier）後，就能依你在本站的飲食紀錄，
+          每週自動寄送一份專屬的攝取分析與建議報告。目前此頁面僅會將資料留存在你的瀏覽器中，尚未實際寄出 Email。
+        </p>
+        <form id="subscribeForm" class="grid-form">
+          <label>姓名 <input type="text" id="subName" required placeholder="你的稱呼"></label>
+          <label>Email <input type="email" id="subEmail" required placeholder="you@example.com"></label>
+          <label>希望收到報告的星期
+            <select id="subDay">
+              <option value="1">星期一</option>
+              <option value="2">星期二</option>
+              <option value="3">星期三</option>
+              <option value="4">星期四</option>
+              <option value="5">星期五</option>
+              <option value="6">星期六</option>
+              <option value="0">星期日</option>
+            </select>
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn primary" id="subSubmitBtn">訂閱週報</button>
+            <button type="button" class="btn danger" id="unsubscribeBtn" style="display:none;">取消訂閱</button>
+          </div>
+        </form>
+        <div id="subscribeStatus" class="slider-hint" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row">
+          <h3>本週報告預覽</h3>
+          <button class="btn secondary" id="genReportBtn">產生本週報告預覽</button>
+        </div>
+        <p class="hint" style="margin-top:-6px;">依你目前在「飲食紀錄」中已輸入的資料，模擬一份未來會寄送到信箱的週報內容。</p>
+        <div id="reportPreview"></div>
+      </div>
+    </section>
+
     <!-- Profile -->
     <section class="panel" id="panel-profile">
       <div class="panel-header">
@@ -245,6 +304,30 @@
       <div class="card" id="profileResultCard" style="display:none;">
         <h3>計算結果</h3>
         <div class="result-grid" id="profileResults"></div>
+      </div>
+
+      <div class="card">
+        <h3>AI 拍照辨識設定</h3>
+        <p class="hint" style="margin-top:-8px;">
+          「飲食紀錄」頁的拍照辨識功能使用 Google Gemini API（具影像辨識能力）。
+          金鑰只會儲存在你目前使用的瀏覽器中，並直接從瀏覽器送往 Google 的伺服器進行辨識，不會經過任何其他第三方，
+          也不會包含在「匯出資料」的備份檔中。請至 Google AI Studio 申請屬於你自己的 API Key。
+          Gemini 的 API Key 會附加在請求網址上，建議在 Google AI Studio／Cloud Console 為金鑰設定 HTTP Referrer 限制以降低外洩風險。
+          每次辨識都會呼叫 API，依你的方案可能產生費用，請自行留意用量。
+        </p>
+        <div class="grid-form">
+          <label>Gemini API Key
+            <input type="password" id="geminiApiKey" placeholder="AIza...">
+          </label>
+          <label>辨識模型 <span class="hint">(填入完整模型代號)</span>
+            <input type="text" id="geminiModel" placeholder="gemini-3.6-flash">
+          </label>
+          <div class="form-actions">
+            <button type="button" class="btn primary" id="saveApiKeyBtn">儲存設定</button>
+            <button type="button" class="btn danger" id="clearApiKeyBtn">清除金鑰</button>
+          </div>
+        </div>
+        <div id="apiKeyStatus" class="slider-hint" style="margin-top:10px;"></div>
       </div>
 
       <div class="card">

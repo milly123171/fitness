@@ -270,6 +270,91 @@ input[type=range] { accent-color: var(--primary); }
   margin-top: 2px;
 }
 
+.email-preview {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 14px;
+}
+.email-preview .email-header {
+  background: var(--primary);
+  color: #fff;
+  padding: 16px 20px;
+}
+.email-preview .email-header .email-subject { font-weight: 800; font-size: 16px; }
+.email-preview .email-header .email-meta { font-size: 12px; opacity: 0.85; margin-top: 4px; }
+.email-preview .email-body { padding: 18px 20px; background: var(--surface); }
+.email-preview .email-body p { margin: 0 0 12px; line-height: 1.6; font-size: 14px; }
+.email-preview .email-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin: 14px 0;
+}
+@media (max-width: 600px) { .email-preview .email-stats { grid-template-columns: 1fr; } }
+.email-preview .email-stat {
+  background: var(--surface-alt);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.email-preview .email-stat .es-label { font-size: 12px; color: var(--text-muted); }
+.email-preview .email-stat .es-value { font-size: 17px; font-weight: 800; }
+.email-preview .email-advice {
+  border-left: 3px solid var(--primary);
+  background: var(--surface-alt);
+  padding: 10px 14px;
+  border-radius: 0 8px 8px 0;
+  font-size: 14px;
+}
+
+.photo-recognize-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 10px 0;
+}
+.photo-recognize-row input[type=file] {
+  flex: 1;
+  min-width: 200px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+#photoPreviewWrap { margin: 10px 0; }
+#photoPreview {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  display: block;
+}
+.ai-result-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.ai-result-fields {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.ai-result-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.ai-result-fields input {
+  width: 90px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
 .toast {
   position: fixed;
   bottom: 24px;

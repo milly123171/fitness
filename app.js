@@ -1,16 +1,30 @@
 // ===================== 資料儲存 =====================
 const STORAGE_KEY = "fitDietApp_v1";
 
+// API 金鑰刻意存在獨立的 localStorage key，不放進 state，
+// 避免「匯出資料」備份檔或分享時意外把金鑰外流。
+const API_KEY_STORAGE = "fitDietApp_geminiApiKey";
+const API_MODEL_STORAGE = "fitDietApp_geminiModel";
+const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+
+function getApiKey() { return localStorage.getItem(API_KEY_STORAGE) || ""; }
+function getApiModel() { return localStorage.getItem(API_MODEL_STORAGE) || DEFAULT_GEMINI_MODEL; }
+
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
-    try { return JSON.parse(raw); } catch (e) { /* fallthrough */ }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed.subscriber === undefined) parsed.subscriber = null;
+      return parsed;
+    } catch (e) { /* fallthrough */ }
   }
   return {
     profile: null,
     foods: SEED_FOODS.map(f => ({ id: uid(), name: f.name, category: f.category, cal: f.cal, protein: f.protein, carb: f.carb, fat: f.fat })),
     recipes: [],
     diary: {}, // date -> { weight, entries: [] }
+    subscriber: null, // { name, email, day, createdAt }
   };
 }
 
@@ -32,6 +46,12 @@ function todayStr(d = new Date()) {
 }
 
 function round1(n) { return Math.round(n * 10) / 10; }
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
 
 function getFoodById(id) { return state.foods.find(f => f.id === id); }
 function getRecipeById(id) { return state.recipes.find(r => r.id === id); }
@@ -177,6 +197,7 @@ function switchTab(tab) {
   if (tab === "diary") renderDiary();
   if (tab === "foods") renderFoods();
   if (tab === "recipes") renderRecipes();
+  if (tab === "subscribe") renderSubscribe();
   if (tab === "profile") renderProfile();
 }
 
@@ -446,6 +467,7 @@ function renderDiary() {
   document.getElementById("diaryDate").value = diaryDate;
   renderMealList("diaryMeals", diaryDate, true);
   populateQuickAddItems();
+  updateApiKeyNotice();
 }
 
 function handleQuickAdd() {
@@ -477,6 +499,168 @@ function handleQuickAdd() {
   document.getElementById("quickAddAmount").value = "";
   renderDiary();
   showToast("已加入紀錄");
+}
+
+// ===================== AI 拍照辨識食物 =====================
+function updateApiKeyNotice() {
+  const notice = document.getElementById("apiKeyNotice");
+  if (!notice) return;
+  notice.textContent = getApiKey()
+    ? `已設定 API Key，使用模型：${getApiModel()}`
+    : "尚未設定 Gemini API Key，請至「個人設定」的「AI 拍照辨識設定」填入後才能使用此功能。";
+}
+
+let selectedPhotoFile = null;
+
+function handlePhotoSelected(e) {
+  const file = e.target.files[0];
+  selectedPhotoFile = file || null;
+  document.getElementById("recognizeStatus").textContent = "";
+  document.getElementById("recognizeResults").innerHTML = "";
+
+  if (!file) {
+    document.getElementById("photoPreviewWrap").style.display = "none";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById("photoPreview").src = reader.result;
+    document.getElementById("photoPreviewWrap").style.display = "block";
+  };
+  reader.readAsDataURL(file);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error("讀取檔案失敗"));
+    reader.readAsDataURL(file);
+  });
+}
+
+const FOOD_RECOGNITION_PROMPT = `請分析這張餐點圖片：
+
+1. 識別盤中所有食材，並預估其生重／熟重（公克）。
+2. 考量外觀油光與烹調方式（若無法判斷，預設以一般外食、少油烹調估算）。
+3. 為每項食材估算熱量（kcal）及三大營養素（蛋白質、脂肪、碳水化合物，皆為公克）。
+4. 標記出不確定性較高的項目（例如隱形油脂、醬汁、調味料等）。
+
+請「只」用以下 JSON 格式回覆，不要加上任何說明文字、不要使用 markdown code block，直接輸出純 JSON（第 3 點的表格請以 items 陣列呈現，第 4 點請寫在 uncertain_notes）：
+{"items":[{"name":"食材名稱","weight_basis":"生重或熟重","estimated_grams":數字,"calories":數字,"protein":數字,"carb":數字,"fat":數字}],"uncertain_notes":"列出不確定性較高的項目與原因"}
+
+如果照片中沒有可辨識的食物，請回傳 {"items":[],"uncertain_notes":""}。`;
+
+async function recognizeFoodPhoto() {
+  const apiKey = getApiKey();
+  if (!apiKey) { showToast("請先至「個人設定」填寫 Gemini API Key"); return; }
+  if (!selectedPhotoFile) { showToast("請先選擇或拍攝一張照片"); return; }
+
+  const statusEl = document.getElementById("recognizeStatus");
+  const resultsEl = document.getElementById("recognizeResults");
+  const btn = document.getElementById("recognizePhotoBtn");
+
+  statusEl.textContent = "辨識中，請稍候...";
+  resultsEl.innerHTML = "";
+  btn.disabled = true;
+
+  try {
+    const base64 = await fileToBase64(selectedPhotoFile);
+    const mimeType = selectedPhotoFile.type || "image/jpeg";
+    const model = getApiModel();
+
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: FOOD_RECOGNITION_PROMPT },
+            { inlineData: { mimeType, data: base64 } },
+          ],
+        }],
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      throw new Error(errBody?.error?.message || `API 錯誤 (HTTP ${res.status})`);
+    }
+
+    const data = await res.json();
+    if (!data.candidates || data.candidates.length === 0) {
+      const blockReason = data.promptFeedback?.blockReason;
+      throw new Error(blockReason ? `請求被阻擋（${blockReason}）` : "沒有收到辨識結果");
+    }
+
+    const text = (data.candidates[0].content?.parts || []).map(p => p.text || "").join("");
+    const jsonText = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(jsonText);
+    const items = Array.isArray(parsed.items) ? parsed.items : [];
+
+    if (items.length === 0) {
+      statusEl.textContent = "沒有辨識出任何食物，請換一張較清楚的照片再試一次。";
+      return;
+    }
+
+    statusEl.textContent = `辨識完成，共找到 ${items.length} 項食物，確認份量後即可加入紀錄。`;
+    renderRecognizedItems(items, parsed.uncertain_notes);
+  } catch (err) {
+    statusEl.textContent = `辨識失敗：${err.message}（若持續失敗，請確認 API Key 是否正確、模型名稱是否存在、額度是否足夠，或改用其他照片再試）`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderRecognizedItems(items, uncertainNotes) {
+  const resultsEl = document.getElementById("recognizeResults");
+  const notesHtml = uncertainNotes
+    ? `<div class="email-advice" style="margin-bottom:10px;">⚠️ 不確定性較高的項目：${escapeHtml(uncertainNotes)}</div>`
+    : "";
+
+  resultsEl.innerHTML = notesHtml + items.map((it, idx) => `
+    <div class="diary-item ai-result-item" data-idx="${idx}" data-name="${escapeHtml(it.name || "未命名食物")}">
+      <div class="item-name">${escapeHtml(it.name || "未命名食物")}${it.weight_basis ? ` <span class="hint">(${escapeHtml(it.weight_basis)})</span>` : ""}</div>
+      <div class="ai-result-fields">
+        <label>公克<input type="number" class="ai-field" data-field="estimated_grams" value="${round1(it.estimated_grams) || 0}" step="1"></label>
+        <label>熱量(kcal)<input type="number" class="ai-field" data-field="calories" value="${Math.round(it.calories) || 0}" step="1"></label>
+        <label>蛋白質(g)<input type="number" class="ai-field" data-field="protein" value="${round1(it.protein) || 0}" step="0.1"></label>
+        <label>碳水(g)<input type="number" class="ai-field" data-field="carb" value="${round1(it.carb) || 0}" step="0.1"></label>
+        <label>脂肪(g)<input type="number" class="ai-field" data-field="fat" value="${round1(it.fat) || 0}" step="0.1"></label>
+      </div>
+      <button class="btn secondary add-ai-item-btn" data-idx="${idx}" type="button">加入紀錄</button>
+    </div>
+  `).join("");
+
+  resultsEl.querySelectorAll(".add-ai-item-btn").forEach(btn => {
+    btn.addEventListener("click", () => addAiItemToDiary(btn.dataset.idx));
+  });
+}
+
+function addAiItemToDiary(idx) {
+  const row = document.querySelector(`.ai-result-item[data-idx="${idx}"]`);
+  if (!row) return;
+  const getVal = field => parseFloat(row.querySelector(`[data-field="${field}"]`).value) || 0;
+  const name = row.dataset.name;
+  const grams = getVal("estimated_grams");
+
+  const meal = document.getElementById("quickAddMeal").value;
+  const day = ensureDiaryDate(diaryDate);
+  day.entries.push({
+    id: uid(),
+    meal,
+    type: "ai-photo",
+    refId: null,
+    name,
+    amountLabel: `約 ${grams} g（AI 辨識，可能有誤差）`,
+    cal: getVal("calories"),
+    protein: getVal("protein"),
+    carb: getVal("carb"),
+    fat: getVal("fat"),
+  });
+  saveState();
+  renderDiary();
+  showToast(`已加入「${name}」`);
 }
 
 // ===================== Foods Panel =====================
@@ -729,6 +913,175 @@ function handleSaveRecipe() {
   showToast("食譜已儲存");
 }
 
+// ===================== Subscribe Panel =====================
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+
+function renderSubscribe() {
+  const sub = state.subscriber;
+  const statusEl = document.getElementById("subscribeStatus");
+  const unsubBtn = document.getElementById("unsubscribeBtn");
+  const submitBtn = document.getElementById("subSubmitBtn");
+
+  if (sub) {
+    document.getElementById("subName").value = sub.name;
+    document.getElementById("subEmail").value = sub.email;
+    document.getElementById("subDay").value = sub.day;
+    statusEl.textContent = `目前已訂閱，將於每週${WEEKDAY_LABELS[sub.day]}收到報告（實際寄送尚待串接 Email 服務）。`;
+    unsubBtn.style.display = "inline-block";
+    submitBtn.textContent = "更新訂閱資料";
+  } else {
+    statusEl.textContent = "尚未訂閱。填寫表單後即可留下你的資料，等待日後開通寄送功能。";
+    unsubBtn.style.display = "none";
+    submitBtn.textContent = "訂閱週報";
+  }
+
+  renderReportPreview(null);
+}
+
+function handleSubscribeSubmit(e) {
+  e.preventDefault();
+  const name = document.getElementById("subName").value.trim();
+  const email = document.getElementById("subEmail").value.trim();
+  const day = document.getElementById("subDay").value;
+
+  if (!name) { showToast("請輸入姓名"); return; }
+  if (!EMAIL_RE.test(email)) { showToast("請輸入有效的 Email 格式"); return; }
+
+  state.subscriber = {
+    name,
+    email,
+    day,
+    createdAt: state.subscriber ? state.subscriber.createdAt : new Date().toISOString(),
+  };
+  saveState();
+  renderSubscribe();
+  showToast("已儲存訂閱資料");
+}
+
+function handleUnsubscribe() {
+  if (!confirm("確定要取消週報訂閱嗎？")) return;
+  state.subscriber = null;
+  saveState();
+  document.getElementById("subscribeForm").reset();
+  renderSubscribe();
+  showToast("已取消訂閱");
+}
+
+// 依過去 7 天的飲食紀錄彙整成一份週報資料
+function computeWeeklyReport() {
+  const end = new Date();
+  const dates = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(end);
+    d.setDate(d.getDate() - i);
+    dates.push(todayStr(d));
+  }
+
+  let totalCal = 0, totalProtein = 0, totalCarb = 0, totalFat = 0, daysLogged = 0;
+  let firstWeight = null, lastWeight = null;
+
+  dates.forEach(dateStr => {
+    const day = state.diary[dateStr];
+    if (day && day.entries.length > 0) {
+      daysLogged++;
+      const t = diaryDayTotals(dateStr);
+      totalCal += t.cal; totalProtein += t.protein; totalCarb += t.carb; totalFat += t.fat;
+    }
+    if (day && day.weight != null) {
+      if (firstWeight == null) firstWeight = day.weight;
+      lastWeight = day.weight;
+    }
+  });
+
+  const denom = Math.max(1, daysLogged);
+  return {
+    startDate: dates[0],
+    endDate: dates[dates.length - 1],
+    daysLogged,
+    totalDays: dates.length,
+    avgCal: totalCal / denom,
+    avgProtein: totalProtein / denom,
+    avgCarb: totalCarb / denom,
+    avgFat: totalFat / denom,
+    firstWeight,
+    lastWeight,
+    weightChange: (firstWeight != null && lastWeight != null) ? round1(lastWeight - firstWeight) : null,
+  };
+}
+
+function buildAdviceLines(report, targets) {
+  const advice = [];
+
+  if (report.daysLogged === 0) {
+    advice.push("這週還沒有任何飲食紀錄，建議至少每天記錄一餐，才能追蹤熱量與營養素的變化。");
+    return advice;
+  }
+  if (report.daysLogged < 4) {
+    advice.push(`這週只記錄了 ${report.daysLogged}/${report.totalDays} 天，建議提高紀錄頻率，數據才能更準確反映實際攝取狀況。`);
+  }
+
+  if (targets) {
+    const calDiff = report.avgCal - targets.targetCal;
+    if (calDiff < -targets.targetCal * 0.1) {
+      advice.push(`平均每日熱量攝取比目標低了約 ${Math.round(-calDiff)} kcal，若目標是增肌，建議適度增加攝取量。`);
+    } else if (calDiff > targets.targetCal * 0.1) {
+      advice.push(`平均每日熱量攝取比目標高了約 ${Math.round(calDiff)} kcal，若目標是減脂，建議留意份量或調整食材選擇。`);
+    } else {
+      advice.push("平均每日熱量攝取相當接近目標，執行狀況良好！");
+    }
+
+    if (report.avgProtein < targets.protein * 0.85) {
+      advice.push(`蛋白質平均攝取 ${round1(report.avgProtein)}g，低於目標 ${targets.protein}g，建議增加雞胸肉、蛋、豆製品或乳清蛋白等優質蛋白來源。`);
+    } else {
+      advice.push(`蛋白質平均攝取 ${round1(report.avgProtein)}g，已達成目標 ${targets.protein}g，請繼續保持。`);
+    }
+  } else {
+    advice.push("尚未設定個人目標，建議先至「個人設定」建立你的熱量與營養素目標，報告才能提供更精準的比較。");
+  }
+
+  if (report.weightChange != null) {
+    const dir = report.weightChange > 0 ? "增加" : report.weightChange < 0 ? "減少" : "持平";
+    advice.push(`本週體重${dir === "持平" ? "維持不變" : `${dir}了 ${Math.abs(report.weightChange)} kg`}。`);
+  }
+
+  return advice;
+}
+
+function renderReportPreview(forcedReport) {
+  const container = document.getElementById("reportPreview");
+  if (!forcedReport && !container.dataset.generated) {
+    container.innerHTML = `<div class="empty-state">按上方「產生本週報告預覽」查看範例內容。</div>`;
+    return;
+  }
+  if (!forcedReport) return; // keep last generated content
+
+  const report = forcedReport;
+  const targets = state.profile ? computeProfileTargets(state.profile) : null;
+  const advice = buildAdviceLines(report, targets);
+  const sub = state.subscriber;
+
+  container.dataset.generated = "1";
+  container.innerHTML = `
+    <div class="email-preview">
+      <div class="email-header">
+        <div class="email-subject">📊 你的每週飲食摘要（${report.startDate} ~ ${report.endDate}）</div>
+        <div class="email-meta">寄送對象：${sub ? `${escapeHtml(sub.name)} &lt;${escapeHtml(sub.email)}&gt;` : "（尚未訂閱，此為預覽）"}</div>
+      </div>
+      <div class="email-body">
+        <p>哈囉${sub ? ` ${escapeHtml(sub.name)}` : ""}，以下是你這週（${report.daysLogged}/${report.totalDays} 天有紀錄）的飲食狀況摘要：</p>
+        <div class="email-stats">
+          <div class="email-stat"><div class="es-label">平均每日熱量</div><div class="es-value">${Math.round(report.avgCal)} kcal${targets ? ` / ${targets.targetCal}` : ""}</div></div>
+          <div class="email-stat"><div class="es-label">平均蛋白質</div><div class="es-value">${round1(report.avgProtein)} g${targets ? ` / ${targets.protein}g` : ""}</div></div>
+          <div class="email-stat"><div class="es-label">平均碳水</div><div class="es-value">${round1(report.avgCarb)} g${targets ? ` / ${targets.carb}g` : ""}</div></div>
+          <div class="email-stat"><div class="es-label">平均脂肪</div><div class="es-value">${round1(report.avgFat)} g${targets ? ` / ${targets.fat}g` : ""}</div></div>
+        </div>
+        ${advice.map(a => `<div class="email-advice" style="margin-bottom:8px;">${a}</div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
 // ===================== Profile Panel =====================
 function renderProfile() {
   const p = state.profile;
@@ -759,6 +1112,37 @@ function renderProfile() {
     `;
   }
   syncRecommendations();
+  renderApiKeySettings();
+}
+
+// ===================== AI 拍照辨識設定（個人設定頁） =====================
+function renderApiKeySettings() {
+  const key = getApiKey();
+  document.getElementById("geminiApiKey").value = key;
+  document.getElementById("geminiModel").value = getApiModel();
+  document.getElementById("apiKeyStatus").textContent = key
+    ? "已儲存 API Key（僅存於此瀏覽器）。"
+    : "尚未設定 API Key，拍照辨識功能將無法使用。";
+}
+
+function handleSaveApiKey() {
+  const key = document.getElementById("geminiApiKey").value.trim();
+  const model = document.getElementById("geminiModel").value.trim() || DEFAULT_GEMINI_MODEL;
+  if (key) localStorage.setItem(API_KEY_STORAGE, key);
+  else localStorage.removeItem(API_KEY_STORAGE);
+  localStorage.setItem(API_MODEL_STORAGE, model);
+  renderApiKeySettings();
+  updateApiKeyNotice();
+  showToast(key ? "已儲存 API 設定" : "已清除 API Key");
+}
+
+function handleClearApiKey() {
+  if (!confirm("確定要清除已儲存的 Gemini API Key 嗎？")) return;
+  localStorage.removeItem(API_KEY_STORAGE);
+  document.getElementById("geminiApiKey").value = "";
+  renderApiKeySettings();
+  updateApiKeyNotice();
+  showToast("已清除 API Key");
 }
 
 // ===================== Profile Recommendations =====================
@@ -922,6 +1306,10 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("quickAddType").addEventListener("change", populateQuickAddItems);
   document.getElementById("quickAddBtn").addEventListener("click", handleQuickAdd);
 
+  // AI 拍照辨識
+  document.getElementById("foodPhotoInput").addEventListener("change", handlePhotoSelected);
+  document.getElementById("recognizePhotoBtn").addEventListener("click", recognizeFoodPhoto);
+
   // Foods
   document.getElementById("foodForm").addEventListener("submit", handleFoodFormSubmit);
   document.getElementById("foodFormCancel").addEventListener("click", resetFoodForm);
@@ -936,6 +1324,13 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("recipeServings").addEventListener("input", renderRecipeIngredientTable);
   document.getElementById("saveRecipeBtn").addEventListener("click", handleSaveRecipe);
   document.getElementById("cancelRecipeBtn").addEventListener("click", closeRecipeEditor);
+
+  // Subscribe
+  document.getElementById("subscribeForm").addEventListener("submit", handleSubscribeSubmit);
+  document.getElementById("unsubscribeBtn").addEventListener("click", handleUnsubscribe);
+  document.getElementById("genReportBtn").addEventListener("click", () => {
+    renderReportPreview(computeWeeklyReport());
+  });
 
   // Profile
   document.getElementById("profileForm").addEventListener("submit", handleProfileSubmit);
@@ -954,6 +1349,9 @@ document.addEventListener("DOMContentLoaded", () => {
   ["pGender", "pActivity", "pGoal"].forEach(id => {
     document.getElementById(id).addEventListener("change", applyRecommendations);
   });
+
+  document.getElementById("saveApiKeyBtn").addEventListener("click", handleSaveApiKey);
+  document.getElementById("clearApiKeyBtn").addEventListener("click", handleClearApiKey);
 
   // Data management
   document.getElementById("exportDataBtn").addEventListener("click", exportData);
