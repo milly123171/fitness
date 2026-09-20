@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>增肌減脂飲食記錄</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon">🍽️</span>
+      <span class="brand-name">增肌減脂飲食紀錄</span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab-btn active" data-tab="dashboard">儀表板</button>
+      <button class="tab-btn" data-tab="diary">飲食紀錄</button>
+      <button class="tab-btn" data-tab="foods">食物庫</button>
+      <button class="tab-btn" data-tab="recipes">食譜</button>
+      <button class="tab-btn" data-tab="profile">個人設定</button>
+    </nav>
+    <button class="theme-toggle" id="themeToggle" title="切換深色/淺色模式">🌙</button>
+  </header>
+
+  <main class="content">
+
+    <!-- Dashboard -->
+    <section class="panel active" id="panel-dashboard">
+      <div class="panel-header">
+        <h1>今日儀表板</h1>
+        <input type="date" id="dashDate" class="date-picker">
+      </div>
+
+      <div class="card-grid">
+        <div class="card stat-card">
+          <div class="stat-label">目標熱量</div>
+          <div class="stat-value" id="statTargetCal">-- kcal</div>
+          <div class="stat-sub" id="statGoalLabel">尚未設定個人資料</div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-label">已攝取熱量</div>
+          <div class="stat-value" id="statIntakeCal">0 kcal</div>
+          <div class="stat-sub"><span id="statRemainCal">剩餘 0 kcal</span></div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-label">今日體重</div>
+          <div class="stat-value" id="statWeight">-- kg</div>
+          <input type="number" id="weightInput" class="weight-input" step="0.1" placeholder="輸入今日體重">
+        </div>
+      </div>
+
+      <div class="card-grid two-col">
+        <div class="card">
+          <h3>熱量攝取進度</h3>
+          <div class="progress-ring-wrap">
+            <canvas id="calRing" width="180" height="180"></canvas>
+            <div class="ring-center" id="ringCenterText">0%</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>三大營養素分佈</h3>
+          <canvas id="macroBarChart" width="320" height="200"></canvas>
+          <div class="macro-legend" id="macroLegend"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>體重趨勢（近 30 天）</h3>
+        <canvas id="weightTrendChart" width="600" height="180"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row">
+          <h3>今日飲食內容</h3>
+        </div>
+        <div id="dashMealList" class="meal-list"></div>
+      </div>
+    </section>
+
+    <!-- Diary -->
+    <section class="panel" id="panel-diary">
+      <div class="panel-header">
+        <h1>飲食紀錄</h1>
+        <input type="date" id="diaryDate" class="date-picker">
+      </div>
+
+      <div id="diaryMeals"></div>
+
+      <div class="card">
+        <h3>快速加入</h3>
+        <div class="quick-add-row">
+          <select id="quickAddType">
+            <option value="food">單一食物</option>
+            <option value="recipe">食譜</option>
+          </select>
+          <select id="quickAddMeal">
+            <option value="早餐">早餐</option>
+            <option value="午餐">午餐</option>
+            <option value="晚餐">晚餐</option>
+            <option value="點心">點心</option>
+          </select>
+          <select id="quickAddItem"></select>
+          <input type="number" id="quickAddAmount" placeholder="克數/份數" min="0" step="1">
+          <button class="btn primary" id="quickAddBtn">加入紀錄</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Foods -->
+    <section class="panel" id="panel-foods">
+      <div class="panel-header">
+        <h1>食物庫</h1>
+        <input type="text" id="foodSearch" class="search-input" placeholder="搜尋食物名稱...">
+      </div>
+
+      <div class="card">
+        <h3 id="foodFormTitle">新增自訂食物 <span class="hint">(以每 100 公克為基準)</span></h3>
+        <form id="foodForm" class="grid-form">
+          <input type="hidden" id="foodEditId">
+          <label>名稱 <input type="text" id="foodName" required placeholder="例如：雞胸肉"></label>
+          <label>分類
+            <select id="foodCategory">
+              <option value="蛋白質">蛋白質</option>
+              <option value="全穀根莖">全穀根莖</option>
+              <option value="蔬菜">蔬菜</option>
+              <option value="水果">水果</option>
+              <option value="乳製品">乳製品</option>
+              <option value="油脂">油脂</option>
+              <option value="其他">其他</option>
+            </select>
+          </label>
+          <label>熱量 (kcal/100g) <input type="number" id="foodCal" required min="0" step="0.1"></label>
+          <label>蛋白質 (g/100g) <input type="number" id="foodProtein" required min="0" step="0.1"></label>
+          <label>碳水 (g/100g) <input type="number" id="foodCarb" required min="0" step="0.1"></label>
+          <label>脂肪 (g/100g) <input type="number" id="foodFat" required min="0" step="0.1"></label>
+          <div class="form-actions">
+            <button type="submit" class="btn primary">儲存食物</button>
+            <button type="button" class="btn ghost" id="foodFormCancel">取消編輯</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="category-filter" id="categoryFilter"></div>
+        <table class="data-table" id="foodTable">
+          <thead>
+            <tr>
+              <th>名稱</th><th>分類</th><th>熱量</th><th>蛋白質</th><th>碳水</th><th>脂肪</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="foodTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Recipes -->
+    <section class="panel" id="panel-recipes">
+      <div class="panel-header">
+        <h1>食譜</h1>
+        <button class="btn primary" id="newRecipeBtn">+ 新增食譜</button>
+      </div>
+
+      <div class="card" id="recipeEditorCard" style="display:none;">
+        <h3 id="recipeEditorTitle">新增食譜</h3>
+        <input type="hidden" id="recipeEditId">
+        <div class="grid-form">
+          <label>食譜名稱 <input type="text" id="recipeName" placeholder="例如：高蛋白雞胸沙拉"></label>
+          <label>份數 <input type="number" id="recipeServings" min="1" step="1" value="1"></label>
+        </div>
+        <div class="recipe-ingredient-add">
+          <select id="recipeIngredientSelect"></select>
+          <input type="number" id="recipeIngredientAmount" placeholder="克數" min="0" step="1">
+          <button type="button" class="btn secondary" id="addIngredientBtn">加入食材</button>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>食材</th><th>克數</th><th>熱量</th><th>蛋白質</th><th>碳水</th><th>脂肪</th><th></th></tr></thead>
+          <tbody id="recipeIngredientBody"></tbody>
+        </table>
+        <div class="recipe-totals" id="recipeTotals"></div>
+        <div class="form-actions">
+          <button class="btn primary" id="saveRecipeBtn">儲存食譜</button>
+          <button class="btn ghost" id="cancelRecipeBtn">取消</button>
+        </div>
+      </div>
+
+      <div class="card-grid" id="recipeList"></div>
+    </section>
+
+    <!-- Profile -->
+    <section class="panel" id="panel-profile">
+      <div class="panel-header">
+        <h1>個人設定</h1>
+      </div>
+
+      <div class="card">
+        <h3>基本資料</h3>
+        <p class="hint" style="margin-top:-8px;">熱量調整幅度與蛋白質攝取會依你填寫的年齡/身高/體重/活動量/目標自動建議，仍可用滑桿手動微調。填寫體脂率可讓蛋白質建議以「去脂體重」計算，更加精準。</p>
+        <form id="profileForm" class="grid-form">
+          <label>性別
+            <select id="pGender">
+              <option value="male">男性</option>
+              <option value="female">女性</option>
+            </select>
+          </label>
+          <label>年齡 <input type="number" id="pAge" min="10" max="100" required></label>
+          <label>身高 (cm) <input type="number" id="pHeight" min="100" max="250" step="0.1" required></label>
+          <label>目前體重 (kg) <input type="number" id="pWeight" min="30" max="250" step="0.1" required></label>
+          <label>體脂率 (%) <span class="hint">(選填，讓蛋白質建議更準確)</span>
+            <input type="number" id="pBodyFat" min="3" max="60" step="0.1" placeholder="例如：18">
+          </label>
+          <label>活動量
+            <select id="pActivity">
+              <option value="1.2">久坐 (幾乎不運動)</option>
+              <option value="1.375">輕度活動 (每週運動1-3天)</option>
+              <option value="1.55">中度活動 (每週運動3-5天)</option>
+              <option value="1.725">高度活動 (每週運動6-7天)</option>
+              <option value="1.9">非常活躍 (勞力工作或每日高強度訓練)</option>
+            </select>
+          </label>
+          <label>目標
+            <select id="pGoal">
+              <option value="bulk">增肌 (熱量盈餘)</option>
+              <option value="cut">減脂 (熱量赤字)</option>
+              <option value="maintain">維持體態</option>
+            </select>
+          </label>
+          <label>熱量調整幅度 (kcal)
+            <input type="range" id="pAdjust" min="100" max="700" step="10" value="400">
+            <span id="pAdjustVal">400 kcal</span>
+            <span class="slider-hint" id="pAdjustHint">請先填寫年齡/身高/體重以取得建議值</span>
+          </label>
+          <label>蛋白質攝取 (g/kg體重)
+            <input type="range" id="pProteinRatio" min="1.2" max="3.2" step="0.1" value="1.8">
+            <span id="pProteinVal">1.8 g/kg</span>
+            <span class="slider-hint" id="pProteinHint">請先填寫年齡/身高/體重以取得建議值</span>
+          </label>
+          <div class="form-actions">
+            <button type="button" class="btn ghost" id="useRecommendedBtn">套用建議值</button>
+            <button type="submit" class="btn primary">儲存並計算目標</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card" id="profileResultCard" style="display:none;">
+        <h3>計算結果</h3>
+        <div class="result-grid" id="profileResults"></div>
+      </div>
+
+      <div class="card">
+        <h3>資料管理</h3>
+        <div class="form-actions">
+          <button class="btn secondary" id="exportDataBtn">匯出資料 (JSON)</button>
+          <button class="btn secondary" id="importDataBtn">匯入資料</button>
+          <input type="file" id="importDataInput" accept="application/json" style="display:none;">
+          <button class="btn danger" id="resetDataBtn">清除全部資料</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
