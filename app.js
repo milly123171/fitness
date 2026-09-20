@@ -1,15 +1,6 @@
 // ===================== 資料儲存 =====================
 const STORAGE_KEY = "fitDietApp_v1";
 
-// API 金鑰刻意存在獨立的 localStorage key，不放進 state，
-// 避免「匯出資料」備份檔或分享時意外把金鑰外流。
-const API_KEY_STORAGE = "fitDietApp_geminiApiKey";
-const API_MODEL_STORAGE = "fitDietApp_geminiModel";
-const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
-
-function getApiKey() { return localStorage.getItem(API_KEY_STORAGE) || ""; }
-function getApiModel() { return localStorage.getItem(API_MODEL_STORAGE) || DEFAULT_GEMINI_MODEL; }
-
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
@@ -401,7 +392,7 @@ function renderMealList(containerId, date, editable) {
   const container = document.getElementById(containerId);
   const day = state.diary[date];
   if (!day || day.entries.length === 0) {
-    container.innerHTML = `<div class="empty-state">尚無紀錄</div>`;
+    container.innerHTML = `<div class="empty-state">🍃 今天還沒有紀錄唷，去新增一筆吧～</div>`;
     return;
   }
   let html = "";
@@ -411,10 +402,11 @@ function renderMealList(containerId, date, editable) {
     const mealCal = items.reduce((s, e) => s + e.cal, 0);
     html += `<div class="meal-group-title">${meal} · ${Math.round(mealCal)} kcal</div>`;
     items.forEach(e => {
+      const emoji = e.type === "recipe" ? "🧁" : emojiForFoodId(e.refId);
       html += `
         <div class="diary-item">
           <div>
-            <div class="item-name">${e.name}</div>
+            <div class="item-name">${emoji} ${e.name}</div>
             <div class="item-meta">${e.amountLabel} · P${round1(e.protein)}g C${round1(e.carb)}g F${round1(e.fat)}g</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;">
@@ -448,7 +440,7 @@ function populateQuickAddItems() {
   if (type === "food") {
     state.foods.slice().sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant')).forEach(f => {
       const opt = document.createElement("option");
-      opt.value = f.id; opt.textContent = `${f.name} (${f.cal}kcal/100g)`;
+      opt.value = f.id; opt.textContent = `${emojiForCategory(f.category)} ${f.name} (${f.cal}kcal/100g)`;
       sel.appendChild(opt);
     });
     document.getElementById("quickAddAmount").placeholder = "克數 (g)";
@@ -456,7 +448,7 @@ function populateQuickAddItems() {
     state.recipes.forEach(r => {
       const opt = document.createElement("option");
       const per = recipePerServing(r);
-      opt.value = r.id; opt.textContent = `${r.name} (${Math.round(per.cal)}kcal/份)`;
+      opt.value = r.id; opt.textContent = `🧁 ${r.name} (${Math.round(per.cal)}kcal/份)`;
       sel.appendChild(opt);
     });
     document.getElementById("quickAddAmount").placeholder = "份數";
@@ -467,7 +459,6 @@ function renderDiary() {
   document.getElementById("diaryDate").value = diaryDate;
   renderMealList("diaryMeals", diaryDate, true);
   populateQuickAddItems();
-  updateApiKeyNotice();
 }
 
 function handleQuickAdd() {
@@ -501,178 +492,31 @@ function handleQuickAdd() {
   showToast("已加入紀錄");
 }
 
-// ===================== AI 拍照辨識食物 =====================
-function updateApiKeyNotice() {
-  const notice = document.getElementById("apiKeyNotice");
-  if (!notice) return;
-  notice.textContent = getApiKey()
-    ? `已設定 API Key，使用模型：${getApiModel()}`
-    : "尚未設定 Gemini API Key，請至「個人設定」的「AI 拍照辨識設定」填入後才能使用此功能。";
-}
-
-let selectedPhotoFile = null;
-
-function handlePhotoSelected(e) {
-  const file = e.target.files[0];
-  selectedPhotoFile = file || null;
-  document.getElementById("recognizeStatus").textContent = "";
-  document.getElementById("recognizeResults").innerHTML = "";
-
-  if (!file) {
-    document.getElementById("photoPreviewWrap").style.display = "none";
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    document.getElementById("photoPreview").src = reader.result;
-    document.getElementById("photoPreviewWrap").style.display = "block";
-  };
-  reader.readAsDataURL(file);
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-    reader.onerror = () => reject(new Error("讀取檔案失敗"));
-    reader.readAsDataURL(file);
-  });
-}
-
-const FOOD_RECOGNITION_PROMPT = `請分析這張餐點圖片：
-
-1. 識別盤中所有食材，並預估其生重／熟重（公克）。
-2. 考量外觀油光與烹調方式（若無法判斷，預設以一般外食、少油烹調估算）。
-3. 為每項食材估算熱量（kcal）及三大營養素（蛋白質、脂肪、碳水化合物，皆為公克）。
-4. 標記出不確定性較高的項目（例如隱形油脂、醬汁、調味料等）。
-
-請「只」用以下 JSON 格式回覆，不要加上任何說明文字、不要使用 markdown code block，直接輸出純 JSON（第 3 點的表格請以 items 陣列呈現，第 4 點請寫在 uncertain_notes）：
-{"items":[{"name":"食材名稱","weight_basis":"生重或熟重","estimated_grams":數字,"calories":數字,"protein":數字,"carb":數字,"fat":數字}],"uncertain_notes":"列出不確定性較高的項目與原因"}
-
-如果照片中沒有可辨識的食物，請回傳 {"items":[],"uncertain_notes":""}。`;
-
-async function recognizeFoodPhoto() {
-  const apiKey = getApiKey();
-  if (!apiKey) { showToast("請先至「個人設定」填寫 Gemini API Key"); return; }
-  if (!selectedPhotoFile) { showToast("請先選擇或拍攝一張照片"); return; }
-
-  const statusEl = document.getElementById("recognizeStatus");
-  const resultsEl = document.getElementById("recognizeResults");
-  const btn = document.getElementById("recognizePhotoBtn");
-
-  statusEl.textContent = "辨識中，請稍候...";
-  resultsEl.innerHTML = "";
-  btn.disabled = true;
-
-  try {
-    const base64 = await fileToBase64(selectedPhotoFile);
-    const mimeType = selectedPhotoFile.type || "image/jpeg";
-    const model = getApiModel();
-
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: FOOD_RECOGNITION_PROMPT },
-            { inlineData: { mimeType, data: base64 } },
-          ],
-        }],
-      }),
-    });
-
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => null);
-      throw new Error(errBody?.error?.message || `API 錯誤 (HTTP ${res.status})`);
-    }
-
-    const data = await res.json();
-    if (!data.candidates || data.candidates.length === 0) {
-      const blockReason = data.promptFeedback?.blockReason;
-      throw new Error(blockReason ? `請求被阻擋（${blockReason}）` : "沒有收到辨識結果");
-    }
-
-    const text = (data.candidates[0].content?.parts || []).map(p => p.text || "").join("");
-    const jsonText = text.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(jsonText);
-    const items = Array.isArray(parsed.items) ? parsed.items : [];
-
-    if (items.length === 0) {
-      statusEl.textContent = "沒有辨識出任何食物，請換一張較清楚的照片再試一次。";
-      return;
-    }
-
-    statusEl.textContent = `辨識完成，共找到 ${items.length} 項食物，確認份量後即可加入紀錄。`;
-    renderRecognizedItems(items, parsed.uncertain_notes);
-  } catch (err) {
-    statusEl.textContent = `辨識失敗：${err.message}（若持續失敗，請確認 API Key 是否正確、模型名稱是否存在、額度是否足夠，或改用其他照片再試）`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function renderRecognizedItems(items, uncertainNotes) {
-  const resultsEl = document.getElementById("recognizeResults");
-  const notesHtml = uncertainNotes
-    ? `<div class="email-advice" style="margin-bottom:10px;">⚠️ 不確定性較高的項目：${escapeHtml(uncertainNotes)}</div>`
-    : "";
-
-  resultsEl.innerHTML = notesHtml + items.map((it, idx) => `
-    <div class="diary-item ai-result-item" data-idx="${idx}" data-name="${escapeHtml(it.name || "未命名食物")}">
-      <div class="item-name">${escapeHtml(it.name || "未命名食物")}${it.weight_basis ? ` <span class="hint">(${escapeHtml(it.weight_basis)})</span>` : ""}</div>
-      <div class="ai-result-fields">
-        <label>公克<input type="number" class="ai-field" data-field="estimated_grams" value="${round1(it.estimated_grams) || 0}" step="1"></label>
-        <label>熱量(kcal)<input type="number" class="ai-field" data-field="calories" value="${Math.round(it.calories) || 0}" step="1"></label>
-        <label>蛋白質(g)<input type="number" class="ai-field" data-field="protein" value="${round1(it.protein) || 0}" step="0.1"></label>
-        <label>碳水(g)<input type="number" class="ai-field" data-field="carb" value="${round1(it.carb) || 0}" step="0.1"></label>
-        <label>脂肪(g)<input type="number" class="ai-field" data-field="fat" value="${round1(it.fat) || 0}" step="0.1"></label>
-      </div>
-      <button class="btn secondary add-ai-item-btn" data-idx="${idx}" type="button">加入紀錄</button>
-    </div>
-  `).join("");
-
-  resultsEl.querySelectorAll(".add-ai-item-btn").forEach(btn => {
-    btn.addEventListener("click", () => addAiItemToDiary(btn.dataset.idx));
-  });
-}
-
-function addAiItemToDiary(idx) {
-  const row = document.querySelector(`.ai-result-item[data-idx="${idx}"]`);
-  if (!row) return;
-  const getVal = field => parseFloat(row.querySelector(`[data-field="${field}"]`).value) || 0;
-  const name = row.dataset.name;
-  const grams = getVal("estimated_grams");
-
-  const meal = document.getElementById("quickAddMeal").value;
-  const day = ensureDiaryDate(diaryDate);
-  day.entries.push({
-    id: uid(),
-    meal,
-    type: "ai-photo",
-    refId: null,
-    name,
-    amountLabel: `約 ${grams} g（AI 辨識，可能有誤差）`,
-    cal: getVal("calories"),
-    protein: getVal("protein"),
-    carb: getVal("carb"),
-    fat: getVal("fat"),
-  });
-  saveState();
-  renderDiary();
-  showToast(`已加入「${name}」`);
-}
-
 // ===================== Foods Panel =====================
 let foodCategoryFilter = "全部";
 let foodSearchTerm = "";
 
 const CATEGORIES = ["全部", "蛋白質", "全穀根莖", "蔬菜", "水果", "乳製品", "油脂", "其他"];
+const CATEGORY_EMOJI = {
+  "全部": "🍽️",
+  "蛋白質": "🍗",
+  "全穀根莖": "🍚",
+  "蔬菜": "🥦",
+  "水果": "🍎",
+  "乳製品": "🥛",
+  "油脂": "🥑",
+  "其他": "🍪",
+};
+function emojiForCategory(category) { return CATEGORY_EMOJI[category] || "🍴"; }
+function emojiForFoodId(foodId) {
+  const food = getFoodById(foodId);
+  return food ? emojiForCategory(food.category) : "🍴";
+}
 
 function renderCategoryFilter() {
   const el = document.getElementById("categoryFilter");
   el.innerHTML = CATEGORIES.map(c =>
-    `<button class="cat-chip ${c === foodCategoryFilter ? "active" : ""}" data-cat="${c}">${c}</button>`
+    `<button class="cat-chip ${c === foodCategoryFilter ? "active" : ""}" data-cat="${c}">${emojiForCategory(c)} ${c}</button>`
   ).join("");
   el.querySelectorAll(".cat-chip").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -691,13 +535,13 @@ function renderFoods() {
   list.sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
 
   if (list.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">找不到符合的食物</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">🔍 找不到符合的食物，換個關鍵字試試看？</td></tr>`;
     return;
   }
 
   tbody.innerHTML = list.map(f => `
     <tr>
-      <td>${f.name}</td>
+      <td>${emojiForCategory(f.category)} ${f.name}</td>
       <td>${f.category}</td>
       <td>${f.cal}</td>
       <td>${f.protein}</td>
@@ -728,14 +572,14 @@ function startEditFood(id) {
   document.getElementById("foodProtein").value = f.protein;
   document.getElementById("foodCarb").value = f.carb;
   document.getElementById("foodFat").value = f.fat;
-  document.getElementById("foodFormTitle").textContent = "編輯食物";
+  document.getElementById("foodFormTitle").textContent = "✏️ 編輯食物";
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function resetFoodForm() {
   document.getElementById("foodForm").reset();
   document.getElementById("foodEditId").value = "";
-  document.getElementById("foodFormTitle").innerHTML = `新增自訂食物 <span class="hint">(以每 100 公克為基準)</span>`;
+  document.getElementById("foodFormTitle").innerHTML = `✏️ 新增自訂食物 <span class="hint">(以每 100 公克為基準)</span>`;
 }
 
 function deleteFood(id) {
@@ -784,14 +628,14 @@ let editingRecipe = null; // { id, name, servings, ingredients: [{foodId, grams}
 function renderRecipes() {
   const list = document.getElementById("recipeList");
   if (state.recipes.length === 0) {
-    list.innerHTML = `<div class="empty-state">尚未建立任何食譜，點擊上方「+ 新增食譜」開始建立。</div>`;
+    list.innerHTML = `<div class="empty-state">🧁 尚未建立任何食譜，點擊上方「新增食譜」開始建立。</div>`;
     return;
   }
   list.innerHTML = state.recipes.map(r => {
     const per = recipePerServing(r);
     return `
       <div class="card recipe-card">
-        <div class="recipe-title">${r.name}</div>
+        <div class="recipe-title">🧁 ${r.name}</div>
         <div class="recipe-meta">共 ${r.servings} 份 · 每份 ${Math.round(per.cal)} kcal · P${round1(per.protein)}g C${round1(per.carb)}g F${round1(per.fat)}g</div>
         <div class="recipe-meta">食材：${r.ingredients.map(i => getFoodById(i.foodId)?.name || "(已刪除)").join("、") || "無"}</div>
         <div class="recipe-actions">
@@ -822,14 +666,14 @@ function openRecipeEditor(recipe) {
     : { id: null, name: "", servings: 1, ingredients: [] };
 
   document.getElementById("recipeEditorCard").style.display = "block";
-  document.getElementById("recipeEditorTitle").textContent = recipe ? "編輯食譜" : "新增食譜";
+  document.getElementById("recipeEditorTitle").textContent = recipe ? "✏️ 編輯食譜" : "🧁 新增食譜";
   document.getElementById("recipeEditId").value = editingRecipe.id || "";
   document.getElementById("recipeName").value = editingRecipe.name;
   document.getElementById("recipeServings").value = editingRecipe.servings;
 
   const sel = document.getElementById("recipeIngredientSelect");
   sel.innerHTML = state.foods.slice().sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant')).map(f =>
-    `<option value="${f.id}">${f.name}</option>`
+    `<option value="${f.id}">${emojiForCategory(f.category)} ${f.name}</option>`
   ).join("");
 
   renderRecipeIngredientTable();
@@ -844,7 +688,7 @@ function closeRecipeEditor() {
 function renderRecipeIngredientTable() {
   const tbody = document.getElementById("recipeIngredientBody");
   if (!editingRecipe.ingredients.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">尚未加入食材</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">🥄 尚未加入食材</td></tr>`;
   } else {
     tbody.innerHTML = editingRecipe.ingredients.map((ing, idx) => {
       const food = getFoodById(ing.foodId);
@@ -1112,37 +956,6 @@ function renderProfile() {
     `;
   }
   syncRecommendations();
-  renderApiKeySettings();
-}
-
-// ===================== AI 拍照辨識設定（個人設定頁） =====================
-function renderApiKeySettings() {
-  const key = getApiKey();
-  document.getElementById("geminiApiKey").value = key;
-  document.getElementById("geminiModel").value = getApiModel();
-  document.getElementById("apiKeyStatus").textContent = key
-    ? "已儲存 API Key（僅存於此瀏覽器）。"
-    : "尚未設定 API Key，拍照辨識功能將無法使用。";
-}
-
-function handleSaveApiKey() {
-  const key = document.getElementById("geminiApiKey").value.trim();
-  const model = document.getElementById("geminiModel").value.trim() || DEFAULT_GEMINI_MODEL;
-  if (key) localStorage.setItem(API_KEY_STORAGE, key);
-  else localStorage.removeItem(API_KEY_STORAGE);
-  localStorage.setItem(API_MODEL_STORAGE, model);
-  renderApiKeySettings();
-  updateApiKeyNotice();
-  showToast(key ? "已儲存 API 設定" : "已清除 API Key");
-}
-
-function handleClearApiKey() {
-  if (!confirm("確定要清除已儲存的 Gemini API Key 嗎？")) return;
-  localStorage.removeItem(API_KEY_STORAGE);
-  document.getElementById("geminiApiKey").value = "";
-  renderApiKeySettings();
-  updateApiKeyNotice();
-  showToast("已清除 API Key");
 }
 
 // ===================== Profile Recommendations =====================
@@ -1306,10 +1119,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("quickAddType").addEventListener("change", populateQuickAddItems);
   document.getElementById("quickAddBtn").addEventListener("click", handleQuickAdd);
 
-  // AI 拍照辨識
-  document.getElementById("foodPhotoInput").addEventListener("change", handlePhotoSelected);
-  document.getElementById("recognizePhotoBtn").addEventListener("click", recognizeFoodPhoto);
-
   // Foods
   document.getElementById("foodForm").addEventListener("submit", handleFoodFormSubmit);
   document.getElementById("foodFormCancel").addEventListener("click", resetFoodForm);
@@ -1349,9 +1158,6 @@ document.addEventListener("DOMContentLoaded", () => {
   ["pGender", "pActivity", "pGoal"].forEach(id => {
     document.getElementById(id).addEventListener("change", applyRecommendations);
   });
-
-  document.getElementById("saveApiKeyBtn").addEventListener("click", handleSaveApiKey);
-  document.getElementById("clearApiKeyBtn").addEventListener("click", handleClearApiKey);
 
   // Data management
   document.getElementById("exportDataBtn").addEventListener("click", exportData);
